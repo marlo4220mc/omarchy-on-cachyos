@@ -105,6 +105,38 @@ read -r OMARCHY_USER_EMAIL
 export OMARCHY_USER_EMAIL
 
 # ============================================================================
+# Robust patching helper
+# ============================================================================
+# The layout of the omarchy repo changed a lot across releases, so a bare
+# `sed -i` is not safe here:
+#   - if the file is missing the sed fails and `set -e` aborts the install
+#     (install/config/walker-elephant.sh only exists from v3.2.0,
+#      install/config/omarchy-ai-skill.sh only from v3.3.0);
+#   - if the file exists but upstream changed the line, the sed silently
+#     does nothing and you believe a fix was applied when it was not
+#     (config/uwsm/env gained `--shims`, and bin/omarchy-update-restart was
+#     rewritten from scratch).
+#
+# patch <file> <detect-regex> <description> <sed-expression>
+#   file missing      -> [skip]   and keep going
+#   pattern missing   -> [aviso]  and keep going (upstream moved on)
+#   pattern present   -> [ok]     and apply the sed
+function patch {
+    local file="$1" detect="$2" desc="$3" sedexpr="$4"
+
+    if [ ! -f "$file" ]; then
+        echo "  [skip]  $desc -- $file does not exist in this release"
+        return 0
+    fi
+    if ! grep -qE -- "$detect" "$file"; then
+        echo "  [aviso] $desc -- upstream changed it, pattern not found in $file"
+        return 0
+    fi
+    sed -i -E "$sedexpr" "$file"
+    echo "  [ok]    $desc"
+}
+
+# ============================================================================
 # v3: Source-based install (original flow with patches)
 # ============================================================================
 
@@ -113,37 +145,72 @@ function install_v3 {
     cd "$OMARCHY_DIR"
 
     # Remove tldr installation to prevent conflict with tealdeer install
-    sed -i '/tldr/d' install/omarchy-base.packages
+    patch install/omarchy-base.packages '^[ \t]*tldr[ \t]*$' \
+        "drop tldr (clashes with tealdeer)" \
+        '/^[ \t]*tldr[ \t]*$/d'
 
-    # Update restart-needed for kernel updates to use cachyos instead of arch
-    sed -i "s/ | sed 's\/-arch\/\\\.arch\/'//" bin/omarchy-update-restart
-    sed -i "s/'{print \$2}'/'{print \$2 \"-\" \$1}' | sed 's\/-linux\/\/'/" bin/omarchy-update-restart
-    sed -i '/linux-cachyos/ ! s/pacman -Q linux/pacman -Q linux-cachyos/' bin/omarchy-update-restart
+    # Update restart-needed for kernel updates to use cachyos instead of arch.
+    # Only older v3 releases compare `pacman -Q linux`; later ones walk
+    # /usr/lib/modules with `pacman -Qo`, which is already kernel-agnostic and
+    # correct on linux-cachyos, so there is nothing to patch there.
+    if [ -f bin/omarchy-update-restart ]; then
+        if grep -qF 'pacman -Q linux' bin/omarchy-update-restart; then
+            sed -i "s/ | sed 's\/-arch\/\\\.arch\/'//" bin/omarchy-update-restart
+            sed -i "s/'{print \$2}'/'{print \$2 \"-\" \$1}' | sed 's\/-linux\/\/'/" bin/omarchy-update-restart
+            sed -i '/linux-cachyos/ ! s/pacman -Q linux/pacman -Q linux-cachyos/' bin/omarchy-update-restart
+            echo "  [ok]    omarchy-update-restart -> cachyos"
+        else
+            echo "  [ok]    omarchy-update-restart is already kernel-agnostic (no patch needed)"
+        fi
+    else
+        echo "  [skip]  bin/omarchy-update-restart does not exist in this release"
+    fi
 
     # Remove pacman.sh from preflight/all.sh to prevent conflict with cachyos packages
-    sed -i '/run_logged \$OMARCHY_INSTALL\/preflight\/pacman\.sh/d' install/preflight/all.sh
+    patch install/preflight/all.sh 'run_logged \$OMARCHY_INSTALL/preflight/pacman\.sh' \
+        "drop pacman.sh from preflight/all.sh" \
+        '/run_logged \$OMARCHY_INSTALL\/preflight\/pacman\.sh/d'
 
     # Replace nvidia.sh with custom CachyOS driver logic
-    cp "$SCRIPT_DIR/nvidia.sh" install/config/hardware/nvidia.sh
-    chmod +x install/config/hardware/nvidia.sh
+    if [ -f install/config/hardware/nvidia.sh ]; then
+        cp "$SCRIPT_DIR/nvidia.sh" install/config/hardware/nvidia.sh
+        chmod +x install/config/hardware/nvidia.sh
+        echo "  [ok]    nvidia.sh de CachyOS"
+    else
+        echo "  [skip]  install/config/hardware/nvidia.sh does not exist in this release"
+    fi
 
-    # Fix omarchy-ai-skill.sh symlink to be idempotent on re-runs
-    sed -i 's/ln -s/ln -sf/' install/config/omarchy-ai-skill.sh
+    # Fix omarchy-ai-skill.sh symlink to be idempotent on re-runs.
+    # \b keeps an already-idempotent `ln -sfn` untouched (upstream ships it
+    # that way since v3.3.x); a plain `s/ln -s/ln -sf/` would turn it into the
+    # nonsense flag soup `ln -sfsn`.
+    patch install/config/omarchy-ai-skill.sh '\bln -s\b' \
+        "omarchy-ai-skill.sh: idempotent symlinks" \
+        's/\bln -s\b/ln -sfn/g'
 
     # Remove plymouth.sh source line
-    sed -i '/run_logged \$OMARCHY_INSTALL\/login\/plymouth\.sh/d' install/login/all.sh
+    patch install/login/all.sh 'run_logged \$OMARCHY_INSTALL/login/plymouth\.sh' \
+        "drop plymouth.sh" \
+        '/run_logged \$OMARCHY_INSTALL\/login\/plymouth\.sh/d'
 
     # Remove limine-snapper.sh source line
-    sed -i '/run_logged \$OMARCHY_INSTALL\/login\/limine-snapper\.sh/d' install/login/all.sh
+    patch install/login/all.sh 'run_logged \$OMARCHY_INSTALL/login/limine-snapper\.sh' \
+        "drop limine-snapper.sh" \
+        '/run_logged \$OMARCHY_INSTALL\/login\/limine-snapper\.sh/d'
 
-    # Remove alt-bootloaders.sh source line
-    sed -i '/run_logged \$OMARCHY_INSTALL\/login\/alt-bootloaders\.sh/d' install/login/all.sh
+    # Remove alt-bootloaders.sh source line (dropped by upstream in later v3)
+    patch install/login/all.sh 'run_logged \$OMARCHY_INSTALL/login/alt-bootloaders\.sh' \
+        "drop alt-bootloaders.sh" \
+        '/run_logged \$OMARCHY_INSTALL\/login\/alt-bootloaders\.sh/d'
 
     # Remove pacman.sh from post-install/all.sh
-    sed -i '/run_logged \$OMARCHY_INSTALL\/post-install\/pacman\.sh/d' install/post-install/all.sh
+    patch install/post-install/all.sh 'run_logged \$OMARCHY_INSTALL/post-install/pacman\.sh' \
+        "drop pacman.sh from post-install/all.sh" \
+        '/run_logged \$OMARCHY_INSTALL\/post-install\/pacman\.sh/d'
 
     # Disable wpa_supplicant and configure NetworkManager to use iwd backend
-    cat >> install/config/hardware/network.sh << 'NETEOF'
+    if [ -f install/config/hardware/network.sh ]; then
+        cat >> install/config/hardware/network.sh << 'NETEOF'
 
 # Disable wpa_supplicant to prevent conflict with iwd
 sudo systemctl disable --now wpa_supplicant.service 2>/dev/null
@@ -157,9 +224,14 @@ wifi.backend=iwd
 EOF
 fi
 NETEOF
+        echo "  [ok]    iwd backend + wpa_supplicant disabled"
+    else
+        echo "  [skip]  install/config/hardware/network.sh does not exist in this release"
+    fi
 
     # Pin walker to the omarchy repo
-    sed -i '1a\
+    if [ -f install/config/walker-elephant.sh ]; then
+        sed -i '1a\
 # Pin walker to omarchy repo to prevent CachyOS version conflict\
 if ! grep -q "^IgnorePkg.*walker" /etc/pacman.conf 2>/dev/null; then\
   if grep -q "^IgnorePkg" /etc/pacman.conf; then\
@@ -169,15 +241,28 @@ if ! grep -q "^IgnorePkg.*walker" /etc/pacman.conf 2>/dev/null; then\
   fi\
 fi\
 ' install/config/walker-elephant.sh
+        echo "  [ok]    walker pinned to the omarchy repo"
+    else
+        echo "  [skip]  install/config/walker-elephant.sh does not exist in this release"
+    fi
 
-    # Update mise activation to support both bash and fish
-    sed -i 's/omarchy-cmd-present mise && eval "\$(mise activate bash)"/if [ "\$SHELL" = "\/bin\/bash" ] \&\& command -v mise \&> \/dev\/null; then\n  eval "\$(mise activate bash)"\nelif [ "\$SHELL" = "\/bin\/fish" ] \&\& command -v mise \&> \/dev\/null; then\n  mise activate fish | source\nfi/' config/uwsm/env
+    # Update mise activation to support both bash and fish.
+    # Upstream added `--shims` in later v3 releases, so the pattern has to
+    # match both forms; \1 preserves whatever the upstream line was using.
+    patch config/uwsm/env '^omarchy-cmd-present mise && eval' \
+        "mise: activate for bash and fish" \
+        's|^omarchy-cmd-present mise && eval "\$\(mise activate bash( --shims)?\)"$|if [ "$SHELL" = "/bin/bash" ] \&\& command -v mise \&> /dev/null; then\n  eval "$(mise activate bash\1)"\nelif [ "$SHELL" = "/bin/fish" ] \&\& command -v mise \&> /dev/null; then\n  mise activate fish\1 \| source\nfi|'
 
-    # Allow CachyOS by leaving the upstream Arch-derivative guard loop syntactically intact but empty
-    sed -i -E 's|^for marker in .*; do$|for marker in; do # CachyOS: derivatives allowed by omarchy-on-cachyos|' install/preflight/guard.sh
+    # Allow CachyOS by leaving the upstream Arch-derivative guard loop
+    # syntactically intact but empty
+    patch install/preflight/guard.sh '^for marker in .*; do$' \
+        "allow CachyOS in the derivative guard" \
+        's|^for marker in .*; do$|for marker in; do # CachyOS: derivatives allowed by omarchy-on-cachyos|'
 
     # Prevent silent abort in presentation.sh when no TTY is available
-    sed -i 's#TERM_SIZE=$(stty size 2>/dev/null </dev/tty)#TERM_SIZE=$(stty size 2>/dev/null </dev/tty || true)#' install/helpers/presentation.sh
+    patch install/helpers/presentation.sh 'TERM_SIZE=\$\(stty size 2>/dev/null </dev/tty\)' \
+        "presentation.sh headless-safe" \
+        's#TERM_SIZE=\$\(stty size 2>/dev/null </dev/tty\)#TERM_SIZE=$(stty size 2>/dev/null </dev/tty || true)#'
 
     # Copy omarchy installation files to ~/.local/share/omarchy
     mkdir -p ~/.local/share/omarchy
@@ -200,6 +285,11 @@ fi\
     echo "11. Pinned walker to omarchy repo to prevent CachyOS version conflict"
     echo "12. Allowed CachyOS as an install target (disabled upstream Arch-derivative guard)"
     echo "13. Made installer TTY-independent (stty no longer aborts headless installs)"
+    echo "14. Enabled mise for bash and fish shells"
+    echo ""
+    echo "Some of the adjustments above did not apply to this Omarchy release and were"
+    echo "reported as [skip] or [aviso] above. That is expected: upstream moved some of"
+    echo "those files or already made them CachyOS-compatible."
     echo ""
     echo "IMPORTANT: If you installed CachyOS without a desktop environment, you will not have a display manager installed."
     echo "If this is the case, you will need to run the following command after this installation script is complete:"
@@ -225,6 +315,17 @@ function install_v4 {
 
     echo "Installing Omarchy packages via pacman..."
     sudo pacman -S --needed --noconfirm omarchy omarchy-settings omarchy-nvim
+
+    # The version picked in fetch-omarchy.sh cannot be honoured in v4 mode: the
+    # omarchy repository only ever publishes the latest release, so pacman
+    # always resolves to whatever is newest. The clone from step 1 is only
+    # used to decide v3-vs-v4. Report what actually got installed so the
+    # mismatch is visible instead of silently ignored.
+    local INSTALLED_OMARCHY
+    INSTALLED_OMARCHY=$(pacman -Q omarchy 2>/dev/null | awk '{print $2}' || true)
+    echo "Installed omarchy version: ${INSTALLED_OMARCHY:-unknown}"
+    echo "NOTE: pkgs.omarchy.org only publishes the latest v4 release, so the"
+    echo "      version chosen in step 1 cannot be pinned in v4 mode."
 
     if [ ! -d "$OMARCHY_SHARE" ]; then
         echo "Error: omarchy package installed but $OMARCHY_SHARE missing."
@@ -303,7 +404,12 @@ run_logged "${OMARCHY_INSTALL}/post-install/localdb.sh"
 stop_install_log
 echo "SYSTEM_APPLY_DONE"
 APPLYEOF
-        sudo OMARCHY_PATH="$OMARCHY_SHARE" OMARCHY_INSTALL_USER="${OMARCHY_USER_NAME}" \
+        # `sudo env VAR=x ...` en vez de `sudo VAR=x ...`: ambos pasan las
+        # variables (verificado con sudo 1.9.17), pero la forma con `env` no
+        # depende de que la politica sudoers local permita variables arbitrarias
+        # en la linea de comandos (env_check/env_delete/setenv), y es la misma
+        # que ya se usa mas abajo con omarchy-provision-user.
+        sudo env OMARCHY_PATH="$OMARCHY_SHARE" OMARCHY_INSTALL_USER="${OMARCHY_USER_NAME}" \
             bash "$APPLY_SCRIPT" \
             || echo "Warning: system apply returned non-zero"
         rm -f "$APPLY_SCRIPT"
