@@ -10,6 +10,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OMARCHY_DIR="$SCRIPT_DIR/../../omarchy"
 
 # ============================================================================
+# --fix-qt: apply ONLY the Qt 6.12 Color singleton fix (omacom/omarchy#14469)
+# Self-contained mode: no git, no clone, no full install. Installs the fix
+# script + the pacman hook so the fix survives future omarchy package updates
+# (their update runs `pacman -Syu --overwrite '/usr/share/omarchy/*'`, which
+# would otherwise restore the broken shell). Then applies the fix now.
+#
+# Remove this block (the whole "commit") once upstream publishes the fix.
+# ============================================================================
+if [ "${1:-}" = "--fix-qt" ]; then
+    if [ ! -f "$SCRIPT_DIR/omarchy-qt-color-fix.sh" ]; then
+        echo "Error: $SCRIPT_DIR/omarchy-qt-color-fix.sh not found."
+        exit 1
+    fi
+    echo "Applying Qt 6.12 Color singleton fix (omarchy#14469)..."
+    sudo install -m 755 "$SCRIPT_DIR/omarchy-qt-color-fix.sh" /usr/local/bin/omarchy-qt-color-fix.sh
+    sudo install -Dm 644 "$SCRIPT_DIR/omarchy-qt-color-fix.hook" \
+        /etc/pacman.d/hooks/omarchy-qt-color-fix.hook
+    echo "Installed: /usr/local/bin/omarchy-qt-color-fix.sh"
+    echo "           /etc/pacman.d/hooks/omarchy-qt-color-fix.hook"
+    sudo /usr/local/bin/omarchy-qt-color-fix.sh
+    echo "Done."
+    exit 0
+fi
+
+# ============================================================================
 # Common prerequisites (v3 and v4)
 # ============================================================================
 
