@@ -23,18 +23,29 @@
 #
 # Environment overrides
 #   MIN_SPEED     bytes/s below which a mirror is demoted (default 102400)
-#   MAX_TIME      seconds allowed per probe (default 8)
-#   MIN_BYTES     minimum bytes a probe must transfer to count (default 100000)
+#   FAST_ENOUGH   bytes/s at which the list is already fine and nothing is
+#                 rewritten (default 200000)
+#   MAX_TIME      seconds allowed per probe (default 6)
+#   MIN_BYTES     minimum bytes a probe must transfer to count (default 131072)
+#   RANGE_BYTES   bytes fetched per probe (default 262144)
 #   CONCURRENCY   parallel probes (default 8)
 #   MIRROR_DIR    where the mirrorlists live (default /etc/pacman.d)
 set -euo pipefail
 
 MIRROR_DIR="${MIRROR_DIR:-/etc/pacman.d}"
 MIN_SPEED="${MIN_SPEED:-102400}"
-MAX_TIME="${MAX_TIME:-8}"
-MIN_BYTES="${MIN_BYTES:-100000}"
+FAST_ENOUGH="${FAST_ENOUGH:-200000}"
+MAX_TIME="${MAX_TIME:-6}"
+MIN_BYTES="${MIN_BYTES:-131072}"
+RANGE_BYTES="${RANGE_BYTES:-262144}"
 CONCURRENCY="${CONCURRENCY:-8}"
 DRY_RUN=0
+
+# Speed per host, so the three mirrorlists (which list the same hosts with a
+# different $arch token) are only measured once per run. Kept in a file
+# because the probes run in background subshells, where a shell variable
+# would not be shared back.
+CACHE_FILE=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -65,13 +76,14 @@ logf() {
 
 # Which concrete repo names to probe, per mirrorlist. The `$repo` token is
 # filled in by pacman per repository, so a single mirrorlist file serves
-# several repos; any of them is a valid probe target.
+# several repos; any of them is a valid probe target. Smallest first: the
+# probe stops as soon as one of them transfers enough bytes.
 repo_candidates() {
     case "$1" in
-        *v4-mirrorlist) printf '%s\n' cachyos-core-znver4 cachyos-extra-znver4 cachyos-znver4 ;;
-        *v3-mirrorlist) printf '%s\n' cachyos-core-v3 cachyos-extra-v3 cachyos-v3 ;;
+        *v4-mirrorlist) printf '%s\n' cachyos-znver4 cachyos-core-znver4 cachyos-extra-znver4 ;;
+        *v3-mirrorlist) printf '%s\n' cachyos-v3 cachyos-core-v3 cachyos-extra-v3 ;;
         *cachyos-mirrorlist) printf '%s\n' cachyos ;;
-        mirrorlist) printf '%s\n' extra core multilib ;;
+        mirrorlist) printf '%s\n' multilib core extra ;;
         *) printf '%s\n' cachyos extra core ;;
     esac
 }
@@ -89,50 +101,68 @@ expand_template() {
 }
 
 # Probe one mirror template. Echoes "<bytes_per_second>\t<template>".
+#
+# The probe fetches at most RANGE_BYTES of the repository database: enough to
+# get a meaningful speed number while keeping the bandwidth cost low (the
+# extra.db database alone is 8 MB, and there are ~23 mirrors to check).
+#
 # A probe only counts when the server answers 200 AND transfers at least
 # MIN_BYTES: that rules out both 404s and a connection that dies after a few
 # kilobytes, which would otherwise be scored as "very slow but valid".
 measure_mirror() {
     local tpl="$1"
     local file="$2"
-    local repo url out speed code size
+    local repo url out speed code size host cached
+
+    # Same host, different $arch: reuse the speed measured for it.
+    host="${tpl#*://}"
+    host="${host%%/*}"
+    if [ -n "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+        # `|| true`: grep exits 1 when the host is not cached yet, and under
+        # `set -e -o pipefail` that would kill the whole run.
+        cached="$(grep -m1 "^${host}[[:space:]]" "$CACHE_FILE" 2>/dev/null | head -1 | cut -d' ' -f2 || true)"
+        if [ -n "${cached:-}" ]; then
+            printf '%s\t%s\n' "$cached" "$tpl"
+            return 0
+        fi
+    fi
+
     while read -r repo; do
         [ -n "$repo" ] || continue
         url="$(expand_template "$tpl" "$repo")/$repo.db"
         out="$(curl -sL --connect-timeout 4 --max-time "$MAX_TIME" -o /dev/null \
+            -H "Range: bytes=0-$((RANGE_BYTES - 1))" \
             -w '%{speed_download} %{http_code} %{size_download}' "$url" 2>/dev/null)" || out="0 000 0"
         read -r speed code size <<<"$out"
-        if [ "$code" = "200" ] && [ "${size:-0}" -ge "$MIN_BYTES" ]; then
+        # 200 = the server ignored the Range header and sent the whole file,
+        # 206 = it honoured it and sent only the requested slice.
+        if { [ "$code" = "200" ] || [ "$code" = "206" ]; } && [ "${size:-0}" -ge "$MIN_BYTES" ]; then
             printf '%s\t%s\n' "${speed%%.*}" "$tpl"
+            [ -n "$CACHE_FILE" ] && printf '%s %s\n' "$host" "${speed%%.*}" >>"$CACHE_FILE"
             return 0
         fi
     done < <(repo_candidates "$file")
     printf '0\t%s\n' "$tpl"
+    [ -n "$CACHE_FILE" ] && printf '%s 0\n' "$host" >>"$CACHE_FILE"
+    return 0
 }
 
-# Measure every template in parallel and echo them sorted fastest first.
+# Measure every template and echo them sorted fastest first.
 # The first argument is the mirrorlist file name: it decides which concrete
 # repositories are used to probe the mirrors.
+#
+# Probes run sequentially on purpose. There are ~23 mirrors and each probe is
+# capped at RANGE_BYTES, so a full pass costs a few seconds and a few MB.
+# Running them in parallel made the background jobs race each other's result
+# files, which silently dropped most of the measurements.
 measure_all() {
     local file="$1"
     shift
-    local tmpdir
-    local i=0
     local tpl
-    tmpdir="$(mktemp -d)"
     for tpl in "$@"; do
         [ -n "$tpl" ] || continue
-        while [ "$(jobs -rp | wc -l)" -ge "$CONCURRENCY" ]; do
-            sleep 0.05
-        done
-        ( measure_mirror "$tpl" "$file" >"$tmpdir/$(printf '%04d' "$i").result" ) &
-        i=$((i + 1))
-    done
-    wait
-    if [ -n "$(ls -A "$tmpdir" 2>/dev/null)" ]; then
-        cat "$tmpdir"/*.result | sort -t"$(printf '\t')" -k1,1nr
-    fi
-    rm -rf "$tmpdir"
+        measure_mirror "$tpl" "$file"
+    done | sort -t"$(printf '\t')" -k1,1nr
 }
 
 # Rewrite one mirrorlist so its Server lines are ordered fastest first.
@@ -185,6 +215,23 @@ process_file() {
             return 0
         fi
     done
+
+    log "  $name: checking the mirror in first place..."
+    local -a head_order=()
+    while IFS=$'\t' read -r speed tpl; do
+        [ -n "$tpl" ] || continue
+        head_order+=("$speed"$'\t'"$tpl")
+    done < <(measure_all "$name" "${templates[0]}")
+
+    local head_speed=0
+    if [ "${#head_order[@]}" -gt 0 ]; then
+        head_speed="${head_order[0]%%$'\t'*}"
+    fi
+
+    if [ "$head_speed" -ge "$FAST_ENOUGH" ]; then
+        logf "  $name: first mirror already at %d B/s; nothing to do" "$head_speed"
+        return 0
+    fi
 
     log "  $name: measuring ${#templates[@]} mirrors..."
     while IFS=$'\t' read -r speed tpl; do
@@ -274,6 +321,8 @@ process_file() {
 
 main() {
     local file
+    CACHE_FILE="$(mktemp)"
+    trap 'rm -f "$CACHE_FILE"' EXIT
     for file in \
         "$MIRROR_DIR/cachyos-v4-mirrorlist" \
         "$MIRROR_DIR/cachyos-v3-mirrorlist" \
