@@ -35,6 +35,44 @@ if [ "${1:-}" = "--fix-qt" ]; then
 fi
 
 # ============================================================================
+# --fix-mirrors: reorder the pacman mirrorlists by measured download speed.
+#
+# `cachyos-rate-mirrors` (systemd timer, 3x/day) regenerates the mirrorlists
+# with `rate-mirrors`, whose ~300 ms probe can mis-rank a mirror that has
+# since degraded. We hit exactly that: `ca.mirror.cx` was first in the list at
+# 5 KB/s while `mirror.krfoss.org` (third) served 30 MB/s, and `omarchy
+# update` crawled at ~20 KiB/s with a 40-minute ETA.
+#
+# This installs the reorder script, a systemd drop-in that runs right after
+# `cachyos-rate-mirrors` regenerates the lists, and a pacman hook for the
+# `cachyos-mirrorlist` package. Then it applies the reorder now.
+# ============================================================================
+if [ "${1:-}" = "--fix-mirrors" ]; then
+    if [ ! -f "$SCRIPT_DIR/cachyos-mirror-order.sh" ]; then
+        echo "Error: $SCRIPT_DIR/cachyos-mirror-order.sh not found."
+        exit 1
+    fi
+    echo "Installing the mirror speed reorderer..."
+    sudo install -m 755 "$SCRIPT_DIR/cachyos-mirror-order.sh" /usr/local/bin/cachyos-mirror-order.sh
+    sudo install -Dm 644 "$SCRIPT_DIR/omarchy-mirror-order.service" \
+        /etc/systemd/system/omarchy-mirror-order.service
+    sudo install -Dm 644 "$SCRIPT_DIR/omarchy-mirror-order.hook" \
+        /etc/pacman.d/hooks/omarchy-mirror-order.hook
+    # Drop-in: run the reorderer right after cachyos-rate-mirrors regenerates
+    # the mirrorlists, so the fast mirror always ends up first.
+    sudo install -Dm 644 "$SCRIPT_DIR/cachyos-rate-mirrors.service.d/omarchy-mirror-order.conf" \
+        /etc/systemd/system/cachyos-rate-mirrors.service.d/omarchy-mirror-order.conf
+    sudo systemctl daemon-reload
+    echo "Installed: /usr/local/bin/cachyos-mirror-order.sh"
+    echo "           /etc/systemd/system/omarchy-mirror-order.service"
+    echo "           /etc/systemd/system/cachyos-rate-mirrors.service.d/omarchy-mirror-order.conf"
+    echo "           /etc/pacman.d/hooks/omarchy-mirror-order.hook"
+    sudo /usr/local/bin/cachyos-mirror-order.sh
+    echo "Done."
+    exit 0
+fi
+
+# ============================================================================
 # Common prerequisites (v3 and v4)
 # ============================================================================
 

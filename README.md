@@ -45,6 +45,8 @@ The philosophy behind this script is to produce a strong and stable blend of Cac
 
 7. NVIDIA Drivers: *By default, CachyOS and Omarchy may attempt to use the latest NVIDIA drivers with open kernel modules. This script does **not** downgrade or pin any driver: it detects whatever NVIDIA driver CachyOS already has installed and respects it. Only if no NVIDIA driver is present at all does it install one via CachyOS's* `chwd` *tool.*
 
+8. Mirror ordering: *CachyOS's* `cachyos-rate-mirrors` *timer regenerates the pacman mirrorlists three times a day, ranking mirrors with a ~300 ms probe. That probe can mis-rank a mirror that has since degraded — we measured* `ca.mirror.cx` *at 5 KB/s while it sat first in the list, and* `omarchy update` *crawled at ~20 KiB/s with a 40-minute ETA while the third mirror served 30 MB/s. This script installs* `cachyos-mirror-order.sh`, *which re-measures every mirror with a real transfer and rewrites the* `Server` *lines fastest-first. It runs automatically right after* `cachyos-rate-mirrors` *(systemd drop-in) *and after the* `cachyos-mirrorlist` *package is upgraded (pacman hook). Slow mirrors are demoted, never removed, so they remain usable as fallback. Re-run it manually with:* `sudo cachyos-mirror-order.sh` *(*--dry-run` *to preview).*
+
 ## 4. Pre-Requisites
 
 IMPORTANT: This script does not install CachyOS. You must do that separately (and first.) This script is intended to be run on a fresh installation of CachyOS with the following configuration choices made: (Note, for information on installing CachyOS, please refer to https://www.cachyos.org.) 
