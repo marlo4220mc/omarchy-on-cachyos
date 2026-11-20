@@ -122,8 +122,15 @@ install_pkgs_tolerant() {
     done
 
     if [ "${#resolvable[@]}" -gt 0 ]; then
-        as_root pacman -S "${PACMOPTS[@]}" "${resolvable[@]}" \
-            || aviso "algunos paquetes no se pudieron instalar: ${resolvable[*]}"
+        # Un conflicto entre dos paquetes cancela la transacción completa; en
+        # ese caso se reintenta de a uno para salvar todo lo que se pueda.
+        if ! as_root pacman -S "${PACMOPTS[@]}" "${resolvable[@]}"; then
+            aviso "la instalación en lote falló (¿conflicto?); reintentando uno por uno"
+            for p in "${resolvable[@]}"; do
+                as_root pacman -S "${PACMOPTS[@]}" "$p" \
+                    || aviso "no se pudo instalar '$p' (se continúa sin él)"
+            done
+        fi
     fi
 
     if [ "${#missing[@]}" -gt 0 ]; then
