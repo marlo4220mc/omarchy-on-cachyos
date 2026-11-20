@@ -59,9 +59,12 @@ done
 
 CHOICE=""
 if [ "${OMARCHY_YES:-0}" = "1" ] || [ ! -t 0 ]; then
-    echo "Sin entrada interactiva: usando la opción $DEFAULT_CHOICE."
+    # Sin terminal hay que fijar la elección acá: si queda vacía, la validación
+    # de abajo la rechaza y la instalación desatendida aborta.
+    CHOICE="$DEFAULT_CHOICE"
+    echo "Sin entrada interactiva: usando la opción $CHOICE."
 else
-    read -r -p "Enter your choice (1-$(( ${#RELEASES[@]} + 1 ))) [Enter = última estable]: " CHOICE
+    read -r -p "Enter your choice (1-$(( ${#RELEASES[@]} + 1 ))) [Enter = última estable]: " CHOICE || true
     # Enter sin número = última estable v4, no "salir".
     if [ -z "$CHOICE" ]; then
         CHOICE="$DEFAULT_CHOICE"
