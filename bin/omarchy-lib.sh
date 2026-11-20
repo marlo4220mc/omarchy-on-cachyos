@@ -57,7 +57,10 @@ as_user() {
 }
 
 # --- pacman ------------------------------------------------------------------
-PACMOPTS=(--noconfirm --needed --disable-download-timeout)
+# --ask 4 responde "sí" a "¿reemplazar el paquete en conflicto?": CachyOS y el
+# repo de omarchy empaquetan lo mismo (p. ej. power-profiles-daemon vs
+# omarchy-power-profiles-daemon) y sin eso pacman aborta la transacción entera.
+PACMOPTS=(--noconfirm --needed --disable-download-timeout --ask 4)
 
 pkg_installed() {
     pacman -Qq "$1" >/dev/null 2>&1

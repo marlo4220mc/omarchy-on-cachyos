@@ -106,7 +106,7 @@ install_guest_tools() {
         vmware)
             msg "Virtualización detectada: VMware"
             if ! pkg_installed open-vm-tools; then
-                as_root pacman -S --needed --noconfirm --disable-download-timeout \
+                as_root pacman -S --needed --noconfirm --disable-download-timeout --ask 4 \
                     open-vm-tools || aviso "no se pudo instalar open-vm-tools"
             fi
             if pkg_installed open-vm-tools; then
@@ -117,7 +117,7 @@ install_guest_tools() {
         kvm|qemu)
             msg "Virtualización detectada: QEMU/KVM"
             if ! pkg_installed qemu-guest-agent; then
-                as_root pacman -S --needed --noconfirm --disable-download-timeout \
+                as_root pacman -S --needed --noconfirm --disable-download-timeout --ask 4 \
                     qemu-guest-agent || true
             fi
             pkg_installed qemu-guest-agent \
@@ -282,17 +282,17 @@ msg "Omarchy detectado: v${OMARCHY_VERSION_MAJOR}.x"
 # último recurso.
 if [ -z "$(aur_helper)" ]; then
     msg "Instalando yay desde los repos de CachyOS…"
-    as_root pacman -S --needed --noconfirm --disable-download-timeout yay \
+    as_root pacman -S --needed --noconfirm --disable-download-timeout --ask 4 yay \
         || aviso "yay no está en los repos; se intenta con paru"
 fi
 if [ -z "$(aur_helper)" ]; then
     msg "yay no está en los repos. Instalando paru…"
-    as_root pacman -S --needed --noconfirm --disable-download-timeout paru \
+    as_root pacman -S --needed --noconfirm --disable-download-timeout --ask 4 paru \
         || aviso "paru tampoco está en los repos; se compila yay"
 fi
 if [ -z "$(aur_helper)" ]; then
     msg "Ni yay ni paru están en los repos. Compilando yay…"
-    as_root pacman -S --needed --noconfirm --disable-download-timeout git base-devel
+    as_root pacman -S --needed --noconfirm --disable-download-timeout --ask 4 git base-devel
     YAY_TMP="$(mktemp -d /tmp/yay-build.XXXXXX)"
     git clone --depth 1 https://aur.archlinux.org/yay.git "$YAY_TMP/yay"
     ( cd "$YAY_TMP/yay" && makepkg -si --noconfirm )
