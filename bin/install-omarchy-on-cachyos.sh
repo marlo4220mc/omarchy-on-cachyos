@@ -306,9 +306,15 @@ fi
 # Repo [omarchy] + llave (idempotente, tolerante a keyserver caído)
 ensure_omarchy_repo
 
-# Actualización completa: con repos mezclados, un -Sy sin -u deja partial upgrade
+# Actualización completa: con repos mezclados, un -Sy sin -u deja partial upgrade.
+#
+# Si omarchy ya está instalado, su hook de ALPM aborta cualquier `pacman -Syu`
+# directo ("This looks like a direct pacman system upgrade"). Es lo que pasa en
+# cuanto se vuelve a correr el instalador sobre un sistema a medio instalar, así
+# que se usa el bypass que el propio hook documenta.
 msg "Actualizando el sistema (pacman -Syu)…"
-as_root pacman -Syu --noconfirm --disable-download-timeout \
+as_root env OMARCHY_ALLOW_DIRECT_PACMAN=1 \
+    pacman -Syu --noconfirm --disable-download-timeout \
     || die "pacman -Syu falló; revisá el log y reintentá"
 
 # ============================================================================
