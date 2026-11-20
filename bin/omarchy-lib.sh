@@ -109,6 +109,57 @@ install_aur_pkgs() {
     done
 }
 
+# El repo de omarchy empaqueta versiones propias de paquetes que CachyOS ya
+# trae instalados. pacman pregunta "¿quitar el de CachyOS?" y con --noconfirm
+# esa pregunta no se responde: aborta la transacción completa. Se retira el de
+# CachyOS antes, así la instalación en lote no falla.
+OMARCHY_REPLACEMENTS=(
+    "omarchy-power-profiles-daemon:power-profiles-daemon"
+)
+
+omarchy_resolve_conflicts() {
+    local pair new old p wanted
+    for pair in "${OMARCHY_REPLACEMENTS[@]}"; do
+        new="${pair%%:*}"
+        old="${pair##*:}"
+        # Solo cuando el reemplazo está en lo que se va a instalar ahora.
+        wanted=0
+        for p in "$@"; do
+            [ "$p" = "$new" ] && wanted=1
+        done
+        [ "$wanted" -eq 1 ] || continue
+        pkg_available "$new" || continue
+        pkg_installed "$old" || continue
+        msg "Reemplazando $old de CachyOS por $new (Omarchy)…"
+        as_root pacman -R --noconfirm "$old" \
+            || aviso "no se pudo retirar $old; pacman decidirá al instalar $new"
+    done
+}
+
+# Instala un grupo; si la transacción falla la parte por la mitad hasta aislar
+# el paquete problemático. Así un conflicto no obliga a instalar 160 paquetes
+# de a uno (cada transacción dispara un snapshot de snapper).
+install_batch_bisect() {
+    local -a pkgs=("$@")
+    local mid
+
+    [ "${#pkgs[@]}" -eq 0 ] && return 0
+
+    if as_root pacman -S "${PACMOPTS[@]}" "${pkgs[@]}"; then
+        return 0
+    fi
+
+    if [ "${#pkgs[@]}" -eq 1 ]; then
+        aviso "no se pudo instalar '${pkgs[0]}' (se continúa sin él)"
+        return 0
+    fi
+
+    mid=$(( ${#pkgs[@]} / 2 ))
+    aviso "la transacción de ${#pkgs[@]} paquetes falló; probando por mitades"
+    install_batch_bisect "${pkgs[@]:0:mid}"
+    install_batch_bisect "${pkgs[@]:mid}"
+}
+
 # Instala lo que exista en los repos y manda el resto al AUR, sin abortar por
 # un nombre inexistente (pacman cancela TODA la transacción si uno falta).
 install_pkgs_tolerant() {
@@ -125,15 +176,8 @@ install_pkgs_tolerant() {
     done
 
     if [ "${#resolvable[@]}" -gt 0 ]; then
-        # Un conflicto entre dos paquetes cancela la transacción completa; en
-        # ese caso se reintenta de a uno para salvar todo lo que se pueda.
-        if ! as_root pacman -S "${PACMOPTS[@]}" "${resolvable[@]}"; then
-            aviso "la instalación en lote falló (¿conflicto?); reintentando uno por uno"
-            for p in "${resolvable[@]}"; do
-                as_root pacman -S "${PACMOPTS[@]}" "$p" \
-                    || aviso "no se pudo instalar '$p' (se continúa sin él)"
-            done
-        fi
+        omarchy_resolve_conflicts "${resolvable[@]}"
+        install_batch_bisect "${resolvable[@]}"
     fi
 
     if [ "${#missing[@]}" -gt 0 ]; then
