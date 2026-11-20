@@ -276,15 +276,22 @@ if [ "$OMARCHY_VERSION_MAJOR" != "3" ] && [ "$OMARCHY_VERSION_MAJOR" != "4" ]; t
 fi
 msg "Omarchy detectado: v${OMARCHY_VERSION_MAJOR}.x"
 
-# AUR helper: CachyOS publica paru en su repo, así que primero se intenta eso
-# (compilar yay con makepkg pide contraseña a mitad de la instalación).
+# AUR helper: Omarchy usa yay, y CachyOS publica yay (y paru) en su repo, así
+# que se instala el binario. Compilar yay con makepkg pide la contraseña de sudo
+# a mitad de la instalación y deja colgada una corrida desatendida; queda como
+# último recurso.
 if [ -z "$(aur_helper)" ]; then
-    msg "Instalando paru desde los repos de CachyOS…"
-    as_root pacman -S --needed --noconfirm --disable-download-timeout paru \
-        || aviso "paru no está en los repos; se intenta compilar yay"
+    msg "Instalando yay desde los repos de CachyOS…"
+    as_root pacman -S --needed --noconfirm --disable-download-timeout yay \
+        || aviso "yay no está en los repos; se intenta con paru"
 fi
 if [ -z "$(aur_helper)" ]; then
-    msg "Ni yay ni paru están instalados. Compilando yay…"
+    msg "yay no está en los repos. Instalando paru…"
+    as_root pacman -S --needed --noconfirm --disable-download-timeout paru \
+        || aviso "paru tampoco está en los repos; se compila yay"
+fi
+if [ -z "$(aur_helper)" ]; then
+    msg "Ni yay ni paru están en los repos. Compilando yay…"
     as_root pacman -S --needed --noconfirm --disable-download-timeout git base-devel
     YAY_TMP="$(mktemp -d /tmp/yay-build.XXXXXX)"
     git clone --depth 1 https://aur.archlinux.org/yay.git "$YAY_TMP/yay"
