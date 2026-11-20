@@ -117,6 +117,8 @@ OMARCHY_REPLACEMENTS=(
     "omarchy-power-profiles-daemon:power-profiles-daemon"
 )
 
+OMARCHY_SKIP_PKGS=()
+
 omarchy_resolve_conflicts() {
     local pair new old p wanted
     for pair in "${OMARCHY_REPLACEMENTS[@]}"; do
@@ -131,8 +133,13 @@ omarchy_resolve_conflicts() {
         pkg_available "$new" || continue
         pkg_installed "$old" || continue
         msg "Reemplazando $old de CachyOS por $new (Omarchy)…"
-        as_root pacman -R --noconfirm "$old" \
-            || aviso "no se pudo retirar $old; pacman decidirá al instalar $new"
+        if ! as_root pacman -R --noconfirm "$old"; then
+            # Si no se puede retirar (algo lo requiere), se omite el paquete de
+            # omarchy: si no, el lote choca con una pregunta que pacman no
+            # puede responder sin terminal.
+            aviso "no se pudo retirar $old; se omite $new (CachyOS ya cubre eso)"
+            OMARCHY_SKIP_PKGS+=("$new")
+        fi
     done
 }
 
@@ -168,6 +175,9 @@ install_pkgs_tolerant() {
 
     for p in "${want[@]}"; do
         [ -n "$p" ] || continue
+        if [ "${#OMARCHY_SKIP_PKGS[@]}" -gt 0 ] && printf '%s\n' "${OMARCHY_SKIP_PKGS[@]}" | grep -qxF "$p"; then
+            continue
+        fi
         if pkg_available "$p"; then
             resolvable+=("$p")
         else
