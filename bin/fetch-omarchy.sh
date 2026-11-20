@@ -1,9 +1,16 @@
 #!/bin/bash
 
+# Script que elige la versión de Omarchy y la clona.
+#
+# Ojo: este script corre como subproceso del instalador, así que `export` no
+# llega al padre. Para que la versión elegida no se pierda, se deja escrita en
+# $TARGET_DIR/.cachyos-omarchy-version y el instalador la lee de ahí.
+
 # Target destination (relative to this script's location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="$SCRIPT_DIR/../../omarchy"
 REPO_URL="https://github.com/basecamp/omarchy"
+VERSION_FILE="$TARGET_DIR/.cachyos-omarchy-version"
 
 # Fetch available stable version tags, filtering out pre-releases
 echo "Fetching available stable releases from GitHub..."
@@ -38,7 +45,29 @@ for i in "${!RELEASES[@]}"; do
     echo "$((i+2))) $LABEL"
 done
 
-read -r -p "Enter your choice (1-$(( ${#RELEASES[@]} + 1 ))): " CHOICE
+# Sin terminal (o con OMARCHY_YES=1) se instala la última estable v4.
+DEFAULT_CHOICE=1
+for i in "${!RELEASES[@]}"; do
+    TAG="${RELEASES[i]}"
+    MAJOR="${TAG#v}"
+    MAJOR="${MAJOR%%.*}"
+    if [ "$MAJOR" -ge 4 ] 2>/dev/null; then
+        DEFAULT_CHOICE=$((i+2))
+        break
+    fi
+done
+
+CHOICE=""
+if [ "${OMARCHY_YES:-0}" = "1" ] || [ ! -t 0 ]; then
+    echo "Sin entrada interactiva: usando la opción $DEFAULT_CHOICE."
+else
+    read -r -p "Enter your choice (1-$(( ${#RELEASES[@]} + 1 ))) [Enter = última estable]: " CHOICE
+    # Enter sin número = última estable v4, no "salir".
+    if [ -z "$CHOICE" ]; then
+        CHOICE="$DEFAULT_CHOICE"
+        echo "Elegida la opción por defecto: $CHOICE"
+    fi
+fi
 
 # Validate input
 if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || [ "$CHOICE" -lt 1 ] || [ "$CHOICE" -gt $(( ${#RELEASES[@]} + 1 )) ]; then
@@ -57,30 +86,26 @@ else
     echo "Cloning stable version: $SELECTED_TAG..."
 fi
 
-# Detect major version for installer branching
-if [ -n "$SELECTED_TAG" ]; then
-    OMARCHY_VERSION_MAJOR="${SELECTED_TAG#v}"
-    OMARCHY_VERSION_MAJOR="${OMARCHY_VERSION_MAJOR%%.*}"
-else
-    # Bleeding edge: check if main branch has v4 structure
-    OMARCHY_VERSION_MAJOR="4"
-fi
-
-# Export for the installer to use
-export OMARCHY_VERSION_MAJOR
-export SELECTED_TAG
-
 # Ensure target directory is clean before git cloning to prevent fatal conflicts
 if [ -d "$TARGET_DIR" ]; then
     echo ""
     echo "Warning: An existing installation directory was found at $TARGET_DIR"
-    read -r -p "Would you like to delete it and proceed with a clean install? [y/N]: " CONFIRM
+    CONFIRM="y"
+    if [ "${OMARCHY_YES:-0}" != "1" ] && [ -t 0 ]; then
+        read -r -p "Would you like to delete it and proceed with a clean install? [y/N]: " CONFIRM
+    fi
 
     if [[ "${CONFIRM,,}" =~ ^(y|yes)$ ]]; then
         echo "Cleaning up previous installation files at $TARGET_DIR..."
         rm -rf "$TARGET_DIR"
     else
         echo "Proceeding with existing files in $TARGET_DIR..."
+        # Se respeta el clon existente, pero se refresca el marcador de versión.
+        if [ -f "$TARGET_DIR/install.sh" ]; then
+            printf '3\n' > "$VERSION_FILE"
+        else
+            printf '4\n' > "$VERSION_FILE"
+        fi
         exit 0
     fi
 fi
@@ -92,5 +117,13 @@ if ! git -c advice.detachedHead=false clone $BRANCH_ARGS $REPO_URL "$TARGET_DIR"
     exit 1
 fi
 
+# La estructura del clon manda: v3 trae install.sh, v4 (paquetes) no.
+OMARCHY_VERSION_MAJOR="4"
+if [ -f "$TARGET_DIR/install.sh" ]; then
+    OMARCHY_VERSION_MAJOR="3"
+fi
+
+# Marcador para el instalador (y para cualquier re-ejecución).
+printf '%s\n' "$OMARCHY_VERSION_MAJOR" > "$VERSION_FILE"
 echo "Successfully cloned Omarchy repository layout."
 echo "Detected Omarchy major version: $OMARCHY_VERSION_MAJOR"

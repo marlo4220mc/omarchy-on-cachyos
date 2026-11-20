@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = omarchy
+Target = omarchy-settings
+
+[Action]
+Description = Restaurando los ajustes de omarchy-on-cachyos (CachyOS)...
+When = PostTransaction
+Exec = /usr/local/bin/omarchy-cachyos-overrides.sh
