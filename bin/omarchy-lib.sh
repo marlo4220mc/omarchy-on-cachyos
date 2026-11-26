@@ -365,6 +365,124 @@ filter_base_packages() {
               -e '/^omarchy-hyprland-titlebars$/d'
 }
 
+# --- Idioma ------------------------------------------------------------------
+# La ISO de Omarchy recibe el idioma en /etc/omarchy/language. Sobre CachyOS no
+# existe ese marcador, así que se toma el LANG elegido al instalar el sistema.
+# El registro de Omarchy solo tiene UI para códigos concretos (es-MX, pt-BR,
+# zh-CN...): si el país de CachyOS no tiene traducción se usa el hermano más
+# cercano (es-PE -> es-MX, fr-CA -> fr, zh-HK -> zh-TW). No se llama a
+# `omarchy-language seed`: eso reescribiría LANG y cambiaría los formatos
+# (fecha/moneda) que el usuario eligió en CachyOS. Solo se fija el marcador de UI.
+
+OMARCHY_FALLBACK_LANGS="ar bg bn ca cs da de el en es-MX et fa fi fil fr ga he hi hr hu id is it ja ko lt lv ms nl no pl pt pt-BR ro ru si sk sl sr sv sw ta th tr uk ur uz vi zh-CN zh-TW"
+
+omarchy_language_codes() {
+    local registry="${OMARCHY_LOCALES_JSON:-/usr/share/omarchy/default/i18n/locales.json}"
+    if [ -r "$registry" ] && command -v jq >/dev/null 2>&1; then
+        jq -r 'keys[]' "$registry" 2>/dev/null || printf '%s\n' $OMARCHY_FALLBACK_LANGS
+    else
+        printf '%s\n' $OMARCHY_FALLBACK_LANGS
+    fi
+}
+
+normalize_locale_code() {
+    local raw="${1:-}" code base region
+    code="${raw%%.*}"
+    code="${code%%@*}"
+    code="${code//_/-}"
+    [ -n "$code" ] || code="C"
+    if [[ "$code" == *-* ]]; then
+        base="${code%%-*}"
+        region="${code#*-}"
+        code="${base,,}-${region^^}"
+    else
+        code="${code,,}"
+    fi
+    case "$code" in
+        C | POSIX) printf 'en\n' ;;
+        *) printf '%s\n' "$code" ;;
+    esac
+}
+
+# Imprime el código de idioma de UI más cercano al locale indicado (o al del
+# sistema). Deja el locale original en OMARCHY_DETECTED_LOCALE para el log.
+detect_omarchy_language() {
+    local raw="${1:-}" wanted base region candidate
+    local -a codes variants
+
+    if [ -z "$raw" ]; then
+        raw="$(sed -n 's/^[[:space:]]*LANG=//p' /etc/locale.conf 2>/dev/null | tail -n1 | tr -d '"\r')"
+    fi
+    [ -n "$raw" ] || raw="${LANG:-}"
+    [ -n "$raw" ] || raw="C"
+    OMARCHY_DETECTED_LOCALE="$raw"
+
+    wanted="$(normalize_locale_code "$raw")"
+    mapfile -t codes < <(omarchy_language_codes | sort -u)
+
+    # 1) coincidencia exacta: en, pt, pt-BR, zh-CN...
+    for candidate in "${codes[@]}"; do
+        [ "$candidate" = "$wanted" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+
+    base="${wanted%%-*}"
+    region="${wanted#*-}"
+
+    # 2) el idioma base existe: fr-CA -> fr, pt-AO -> pt
+    for candidate in "${codes[@]}"; do
+        [ "$candidate" = "$base" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+
+    # 3) variantes del mismo idioma: es-PE -> es-MX
+    variants=()
+    for candidate in "${codes[@]}"; do
+        case "$candidate" in
+            "$base" | "$base"-*) variants+=("$candidate") ;;
+        esac
+    done
+    if [ ${#variants[@]} -gt 0 ]; then
+        case "$base" in
+            zh)
+                case "$region" in
+                    HK | MO | TW | Hant) printf 'zh-TW\n' ;;
+                    *) printf 'zh-CN\n' ;;
+                esac
+                return 0
+                ;;
+            es)
+                for candidate in "${variants[@]}"; do
+                    [ "$candidate" = "es-MX" ] && { printf 'es-MX\n'; return 0; }
+                done
+                ;;
+        esac
+        printf '%s\n' "${variants[0]}"
+        return 0
+    fi
+
+    # 4) sin traducción conocida: se deja el inglés de Omarchy
+    printf 'en\n'
+}
+
+# Escribe ~/.config/omarchy/language para el usuario de escritorio.
+apply_system_language() {
+    local target_user="${1:-}" home code file tmp group
+    [ -n "$target_user" ] || { aviso "sin usuario destino; no se fija el idioma"; return 0; }
+    home="$(getent passwd "$target_user" | cut -d: -f6 2>/dev/null || true)"
+    [ -n "$home" ] || { aviso "no se pudo resolver la home de '$target_user'"; return 0; }
+
+    code="$(detect_omarchy_language)"
+    group="$(id -gn "$target_user" 2>/dev/null || printf '%s' "$target_user")"
+    file="$home/.config/omarchy/language"
+    tmp="$(mktemp /tmp/omarchy-language.XXXXXX)"
+    printf '%s\n' "$code" > "$tmp"
+    as_root install -d -o "$target_user" -g "$group" "$(dirname "$file")"
+    as_root install -o "$target_user" -g "$group" -m 644 "$tmp" "$file"
+    rm -f "$tmp"
+
+    msg "Idioma elegido en CachyOS: ${OMARCHY_DETECTED_LOCALE:-desconocido}"
+    ok "idioma de UI de Omarchy: $code ($file)"
+}
+
 # --- Preflight ---------------------------------------------------------------
 human_gib() {
     awk -v k="${1:-0}" 'BEGIN { printf "%.1f", k / 1048576 }'

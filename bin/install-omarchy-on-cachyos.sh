@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# install-omarchy-on-cachyos.sh — Instala Omarchy (con la capa en Español/omarchy-es) en CachyOS
+# install-omarchy-on-cachyos.sh — Instala Omarchy en CachyOS
 #
 # Soporta Omarchy v3.x (clon de fuente) y v4.x (paquetes pacman), aplica los
 # parches de compatibilidad con CachyOS, los guardias de arranque, el stack
-# gráfico que corresponda al hardware real, y al final la capa de idioma
-# "Omarchy en Español" desde el repo marlo4220mc/omarchy-es.
+# gráfico que corresponda al hardware real y, al final, fija el idioma de UI
+# de Omarchy a partir del LANG elegido al instalar CachyOS. Si ese país no
+# tiene traducción propia se usa el código de UI más cercano del registro
+# oficial (es-PE -> es-MX, fr-CA -> fr, zh-HK -> zh-TW).
 #
 # Uso:
 #   ./install-omarchy-on-cachyos.sh              instala (pide confirmaciones)
@@ -26,7 +28,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OMARCHY_DIR="$SCRIPT_DIR/../../omarchy"
-ES_REPO_URL="https://github.com/marlo4220mc/omarchy-es"
 OMARCHY_SHARE="/usr/share/omarchy"
 
 # OMARCHY_YES=1 evita las pausas interactivas (instalación desatendida por SSH).
@@ -499,17 +500,9 @@ fi\
     install_qt_color_fix
     install_mirror_order
 
-    # Capa en español (solo si el repo la trae: el mismo instalador sirve para
-    # el fork base omarchy-on-cachyos, que no incluye la traducción).
-    if [ -f "$SCRIPT_DIR/apply-es-layer.sh" ]; then
-        msg ""
-        msg "Aplicando la capa Omarchy en Español (omarchy-es)…"
-        chmod +x "$SCRIPT_DIR/apply-es-layer.sh"
-        "$SCRIPT_DIR/apply-es-layer.sh" "$ES_REPO_URL" "$OMARCHY_USER_NAME" \
-            || aviso "no se pudo aplicar la capa en español"
-    else
-        skip "capa en español no incluida en este repo"
-    fi
+    # Idioma de UI desde el locale elegido en CachyOS (sin reescribir LANG).
+    msg ""
+    apply_system_language "$OMARCHY_USER_NAME"
 }
 
 # ============================================================================
@@ -701,16 +694,9 @@ MKEOF
         fi
     fi
 
-    # --- Omarchy en Español (solo si el repo la trae) ---
-    if [ -f "$SCRIPT_DIR/apply-es-layer.sh" ]; then
-        msg ""
-        msg "Aplicando la capa Omarchy en Español (omarchy-es)…"
-        chmod +x "$SCRIPT_DIR/apply-es-layer.sh"
-        "$SCRIPT_DIR/apply-es-layer.sh" "$ES_REPO_URL" "$OMARCHY_USER_NAME" \
-            || aviso "no se pudo aplicar la capa en español"
-    else
-        skip "capa en español no incluida en este repo"
-    fi
+    # --- Idioma de UI desde el locale elegido en CachyOS ---
+    msg ""
+    apply_system_language "$OMARCHY_USER_NAME"
 
     # --- SDDM ---
     # El tema SDDM de Omarchy no tiene campo de usuario: entra con el último
@@ -755,14 +741,11 @@ MKEOF
     fi
 
     if [ -f "$USER_HOME/.config/omarchy/language" ]; then
-        ok "idioma de Omarchy: $(cat "$USER_HOME/.config/omarchy/language")"
+        ok "idioma de UI de Omarchy: $(cat "$USER_HOME/.config/omarchy/language")"
     else
         aviso "falta $USER_HOME/.config/omarchy/language"
     fi
-
-    local es_plugins
-    es_plugins="$(find "$USER_HOME/.config/omarchy/plugins" -maxdepth 1 -name 'marlo4220.*' -type d 2>/dev/null | wc -l)"
-    ok "$es_plugins plugins en español"
+    ok "locale de CachyOS conservado: ${LANG:-$(sed -n 's/^LANG=//p' /etc/locale.conf 2>/dev/null | tail -n1)}"
 
     case "$(detect_gpu_vendors)" in
         *amd*)
@@ -791,7 +774,7 @@ MKEOF
     msg "  - Guardias de arranque activos (mkinitcpio + limine)"
     msg "  - Ajustes de CachyOS que se restauran tras cada update"
     msg "  - SDDM configurado para $OMARCHY_USER_NAME (omarchy.desktop)"
-    msg "  - Omarchy en Español aplicado (capa omarchy-es)"
+    msg "  - Idioma de UI: $(cat "$USER_HOME/.config/omarchy/language" 2>/dev/null || printf 'en') (desde el LANG de CachyOS)"
     msg ""
     msg "Reiniciá para entrar al escritorio."
     msg ""

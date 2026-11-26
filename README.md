@@ -51,6 +51,23 @@ The philosophy behind this script is to produce a strong and stable blend of Cac
 
 10. Accelerated AUR downloads: *Configures* `~/.config/pacman/makepkg.conf` *with* `aria2c` *(16 parallel streams) for HTTP/HTTPS source downloads, avoiding single-connection throttling on large AUR packages.*
 
+### Language selection
+
+Unlike the official ISO, this script does not show a language picker. It reads the locale chosen when CachyOS was installed (`/etc/locale.conf`, falling back to `$LANG`) and writes the closest UI language code from Omarchy's registry to `~/.config/omarchy/language`:
+
+| CachyOS locale | Omarchy UI |
+|---|---|
+| `es_PE.UTF-8`, `es_ES.UTF-8` | `es-MX` |
+| `es_MX.UTF-8` | `es-MX` |
+| `pt_BR.UTF-8` | `pt-BR` |
+| `pt_PT.UTF-8`, `pt_AO.UTF-8` | `pt` |
+| `fr_CA.UTF-8` | `fr` |
+| `zh_HK.UTF-8` | `zh-TW` |
+| `zh_SG.UTF-8` | `zh-CN` |
+| unknown / `C` | `en` |
+
+An exact registered code wins (`pt-BR`); if only the base language exists it is used (`fr-CA` → `fr`); otherwise the closest registered variant of that language is chosen (`es-PE` → `es-MX`). The system `LANG` is **not** changed, so date, number and currency formats stay exactly as selected in CachyOS.
+
 ## 4. Pre-Requisites
 
 IMPORTANT: This script does not install CachyOS. You must do that separately (and first.) This script is intended to be run on a fresh installation of CachyOS with the following configuration choices made: (Note, for information on installing CachyOS, please refer to https://www.cachyos.org.) 
