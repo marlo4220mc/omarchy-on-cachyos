@@ -62,7 +62,7 @@ Unlike the official ISO, this script does not show a language picker. It reads t
 | `pt_BR.UTF-8` | `pt-BR` |
 | `pt_PT.UTF-8`, `pt_AO.UTF-8` | `pt` |
 | `fr_CA.UTF-8` | `fr` |
-| `zh_HK.UTF-8` | `zh-TW` |
+| `zh_HK.UTF-8`, `zh_Hant.UTF-8` | `zh-TW` |
 | `zh_SG.UTF-8` | `zh-CN` |
 | unknown / `C` | `en` |
 

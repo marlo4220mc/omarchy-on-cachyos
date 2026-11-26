@@ -385,6 +385,15 @@ omarchy_language_codes() {
     fi
 }
 
+# Locale elegido al instalar CachyOS: /etc/locale.conf manda, con respaldo en $LANG.
+omarchy_system_locale() {
+    local raw
+    raw="$(sed -n 's/^[[:space:]]*LANG=//p' /etc/locale.conf 2>/dev/null | tail -n1 | tr -d '"\r')"
+    [ -n "$raw" ] || raw="${LANG:-}"
+    [ -n "$raw" ] || raw="C"
+    printf '%s\n' "$raw"
+}
+
 normalize_locale_code() {
     local raw="${1:-}" code base region
     code="${raw%%.*}"
@@ -405,17 +414,12 @@ normalize_locale_code() {
 }
 
 # Imprime el código de idioma de UI más cercano al locale indicado (o al del
-# sistema). Deja el locale original en OMARCHY_DETECTED_LOCALE para el log.
+# sistema). El locale original se obtiene con omarchy_system_locale.
 detect_omarchy_language() {
     local raw="${1:-}" wanted base region candidate
     local -a codes variants
 
-    if [ -z "$raw" ]; then
-        raw="$(sed -n 's/^[[:space:]]*LANG=//p' /etc/locale.conf 2>/dev/null | tail -n1 | tr -d '"\r')"
-    fi
-    [ -n "$raw" ] || raw="${LANG:-}"
-    [ -n "$raw" ] || raw="C"
-    OMARCHY_DETECTED_LOCALE="$raw"
+    [ -n "$raw" ] || raw="$(omarchy_system_locale)"
 
     wanted="$(normalize_locale_code "$raw")"
     mapfile -t codes < <(omarchy_language_codes | sort -u)
@@ -443,8 +447,8 @@ detect_omarchy_language() {
     if [ ${#variants[@]} -gt 0 ]; then
         case "$base" in
             zh)
-                case "$region" in
-                    HK | MO | TW | Hant) printf 'zh-TW\n' ;;
+                case "${region,,}" in
+                    hk | mo | tw | hant) printf 'zh-TW\n' ;;
                     *) printf 'zh-CN\n' ;;
                 esac
                 return 0
@@ -465,12 +469,14 @@ detect_omarchy_language() {
 
 # Escribe ~/.config/omarchy/language para el usuario de escritorio.
 apply_system_language() {
-    local target_user="${1:-}" home code file tmp group
+    local target_user="${1:-}" home code file tmp group raw normalized
     [ -n "$target_user" ] || { aviso "sin usuario destino; no se fija el idioma"; return 0; }
     home="$(getent passwd "$target_user" | cut -d: -f6 2>/dev/null || true)"
     [ -n "$home" ] || { aviso "no se pudo resolver la home de '$target_user'"; return 0; }
 
-    code="$(detect_omarchy_language)"
+    raw="$(omarchy_system_locale)"
+    normalized="$(normalize_locale_code "$raw")"
+    code="$(detect_omarchy_language "$raw")"
     group="$(id -gn "$target_user" 2>/dev/null || printf '%s' "$target_user")"
     file="$home/.config/omarchy/language"
     tmp="$(mktemp /tmp/omarchy-language.XXXXXX)"
@@ -479,7 +485,11 @@ apply_system_language() {
     as_root install -o "$target_user" -g "$group" -m 644 "$tmp" "$file"
     rm -f "$tmp"
 
-    msg "Idioma elegido en CachyOS: ${OMARCHY_DETECTED_LOCALE:-desconocido}"
+    if [ "$normalized" = "$code" ]; then
+        msg "Locale de CachyOS: $raw"
+    else
+        msg "Locale de CachyOS: $raw -> $code (código de UI más cercano)"
+    fi
     ok "idioma de UI de Omarchy: $code ($file)"
 }
 
