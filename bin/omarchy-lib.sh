@@ -94,6 +94,16 @@ aur_helper() {
     fi
 }
 
+# ¿Existe el nombre exacto en AUR? -Si no resuelve "provides", así un nombre
+# obsoleto no acaba en un fork de otra arquitectura (mesa-vdpau ->
+# mesa-rk35xx-git / mesa-wsl2-git).
+aur_pkg_exists() {
+    local helper
+    helper="$(aur_helper)"
+    [ -n "$helper" ] || return 1
+    "$helper" -Si "$1" >/dev/null 2>&1
+}
+
 # Instala paquetes AUR de uno en uno: si uno falla, el resto igual se intenta.
 install_aur_pkgs() {
     local helper p
@@ -104,6 +114,10 @@ install_aur_pkgs() {
     fi
     for p in "$@"; do
         [ -n "$p" ] || continue
+        if ! aur_pkg_exists "$p"; then
+            aviso "'$p' no existe en AUR con ese nombre; se omite (sin proveedores ajenos)"
+            continue
+        fi
         "$helper" -S --needed --noconfirm "$p" \
             || aviso "no se pudo instalar '$p' desde AUR (se continúa sin él)"
     done
@@ -282,7 +296,9 @@ gpu_packages() {
     for v in $(detect_gpu_vendors); do
         case "$v" in
             amd)
-                pkgs+=(vulkan-radeon libva-mesa-driver mesa-vdpau)
+                # Mesa 26 ya no empaqueta el backend VDPAU de radeonsi: VA-API
+                # (libva) cubre la decodificación por hardware en AMD.
+                pkgs+=(vulkan-radeon libva-mesa-driver)
                 if multilib_enabled; then
                     pkgs+=(lib32-mesa lib32-vulkan-radeon lib32-libva-mesa-driver)
                 fi
